@@ -131,6 +131,20 @@ ROMAN_TO_URDU = {
     "pyar": "پیار", "mohabbat": "محبت", "maaf": "معاف",
     "mashallah": "ماشاءاللہ", "inshallah": "انشاءاللہ",
     "alhamdulillah": "الحمدللہ", "jazakallah": "جزاک اللہ",
+    # Weather words (Airah weather answers, Roman Urdu -> Urdu script).
+    "saaf": "صاف", "aasmaan": "آسمان", "asman": "آسمان",
+    "badal": "بادل", "barish": "بارش", "halki": "ہلکی",
+    "dhund": "دھند", "boondabandi": "بونداباندی", "bochhar": "بوچھاڑ",
+    "toofan": "طوفان", "garaj": "گرج", "chamak": "چمک",
+    "barf": "برف", "chhaye": "چھائے", "hue": "ہوئے",
+    "mehsoos": "محسوس", "nami": "نمی", "hawa": "ہوا",
+    "kilometer": "کلومیٹر", "ghanta": "گھنٹہ", "ghante": "گھنٹے",
+    "feesad": "فیصد", "degree": "ڈگری", "zyada": "زیادہ",
+    "kam": "کم", "sardi": "سردی", "garmi": "گرمی",
+    "thand": "ٹھنڈ", "mausam": "موسم", "sheher": "شہر",
+    "olay": "اولے", "dane": "دانے", "agley": "اگلے",
+    "ghanton": "گھنٹوں", "dinon": "دنوں", "chance": "امکان",
+    "fi": "فی",
 }
 
 

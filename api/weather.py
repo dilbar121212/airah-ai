@@ -27,40 +27,42 @@ USER_AGENT = (
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
-# WMO code -> (English, Urdu, emoji)
+# WMO code -> (English, Urdu script, Roman Urdu, emoji)
 CONDITIONS = {
-    0: ("Clear sky", "Saaf aasmaan", "☀️"),
-    1: ("Mainly clear", "Zyada tar saaf", "🌤️"),
-    2: ("Partly cloudy", "Kuch badal", "⛅"),
-    3: ("Overcast", "Badal chhaye hue", "☁️"),
-    45: ("Foggy", "Dhund", "🌫️"),
-    48: ("Foggy", "Dhund", "🌫️"),
-    51: ("Light drizzle", "Halki boondabandi", "🌦️"),
-    53: ("Drizzle", "Boondabandi", "🌦️"),
-    55: ("Heavy drizzle", "Tez boondabandi", "🌦️"),
-    61: ("Light rain", "Halki barish", "🌧️"),
-    63: ("Rain", "Barish", "🌧️"),
-    65: ("Heavy rain", "Tez barish", "⛈️"),
-    66: ("Freezing rain", "Barf wali barish", "🌧️"),
-    67: ("Freezing rain", "Barf wali barish", "🌧️"),
-    71: ("Light snow", "Halki barf", "🌨️"),
-    73: ("Snow", "Barf", "🌨️"),
-    75: ("Heavy snow", "Tez barf", "🌨️"),
-    77: ("Snow grains", "Barf ke dane", "🌨️"),
-    80: ("Light showers", "Halki bochhar", "🌦️"),
-    81: ("Showers", "Bochhar", "🌦️"),
-    82: ("Heavy showers", "Tez bochhar", "⛈️"),
-    85: ("Snow showers", "Barf ki bochhar", "🌨️"),
-    86: ("Snow showers", "Barf ki bochhar", "🌨️"),
-    95: ("Thunderstorm", "Toofan / garaj chamak", "⛈️"),
-    96: ("Thunderstorm with hail", "Olon ke saath toofan", "⛈️"),
-    99: ("Thunderstorm with hail", "Olon ke saath toofan", "⛈️"),
+    0: ("Clear sky", "صاف آسمان", "Saaf aasmaan", "☀️"),
+    1: ("Mainly clear", "زیادہ تر صاف", "Zyada tar saaf", "🌤️"),
+    2: ("Partly cloudy", "کچھ بادل", "Kuch badal", "⛅"),
+    3: ("Overcast", "بادل چھائے ہوئے", "Badal chhaye hue", "☁️"),
+    45: ("Foggy", "دھند", "Dhund", "🌫️"),
+    48: ("Foggy", "دھند", "Dhund", "🌫️"),
+    51: ("Light drizzle", "ہلکی بونداباندی", "Halki boondabandi", "🌦️"),
+    53: ("Drizzle", "بونداباندی", "Boondabandi", "🌦️"),
+    55: ("Heavy drizzle", "تیز بونداباندی", "Tez boondabandi", "🌦️"),
+    61: ("Light rain", "ہلکی بارش", "Halki barish", "🌧️"),
+    63: ("Rain", "بارش", "Barish", "🌧️"),
+    65: ("Heavy rain", "تیز بارش", "Tez barish", "⛈️"),
+    66: ("Freezing rain", "برف والی بارش", "Barf wali barish", "🌧️"),
+    67: ("Freezing rain", "برف والی بارش", "Barf wali barish", "🌧️"),
+    71: ("Light snow", "ہلکی برف", "Halki barf", "🌨️"),
+    73: ("Snow", "برف", "Barf", "🌨️"),
+    75: ("Heavy snow", "تیز برف", "Tez barf", "🌨️"),
+    77: ("Snow grains", "برف کے دانے", "Barf ke dane", "🌨️"),
+    80: ("Light showers", "ہلکی بوچھاڑ", "Halki bochhar", "🌦️"),
+    81: ("Showers", "بوچھاڑ", "Bochhar", "🌦️"),
+    82: ("Heavy showers", "تیز بوچھاڑ", "Tez bochhar", "⛈️"),
+    85: ("Snow showers", "برف کی بوچھاڑ", "Barf ki bochhar", "🌨️"),
+    86: ("Snow showers", "برف کی بوچھاڑ", "Barf ki bochhar", "🌨️"),
+    95: ("Thunderstorm", "طوفان / گرج چمک", "Toofan / garaj chamak", "⛈️"),
+    96: ("Thunderstorm with hail", "اولوں کے ساتھ طوفان", "Olon ke saath toofan", "⛈️"),
+    99: ("Thunderstorm with hail", "اولوں کے ساتھ طوفان", "Olon ke saath toofan", "⛈️"),
 }
 
 
 def condition(code):
-    en, ur, emoji = CONDITIONS.get(code, ("Unknown", "Maloom nahi", "🌡️"))
-    return {"code": code, "en": en, "ur": ur, "emoji": emoji}
+    en, ur, roman, emoji = CONDITIONS.get(
+        code, ("Unknown", "معلوم نہیں", "Maloom nahi", "🌡️")
+    )
+    return {"code": code, "en": en, "ur": ur, "roman": roman, "emoji": emoji}
 
 
 def fetch_json(url):
