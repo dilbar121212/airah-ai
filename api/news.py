@@ -152,15 +152,101 @@ def translate_batch(items, debug=None):
     ]
     if not todo:
         return {}
+    result = {}
+    # Translate in small batches of 6. Notes from live testing 27 Nov 2026:
+    # - one 12-item call returned empty content; 3- and 6-item calls work.
+    # - response_format json_object makes the model ECHO the English titles
+    #   (only summaries come back in Urdu), so plain mode is used instead.
+    # - even in plain mode the model SOMETIMES echoes the English title
+    #   while translating the summary, so echoed titles are retried below.
+    for start in range(0, len(todo), 6):
+        chunk = todo[start:start + 6]
+        result.update(_translate_chunk(chunk, key, debug))
+    # On a 429 (Groq per-minute token limit) stop retrying: more calls
+    # would only burn the shared quota. The app falls back to English.
+    if debug is not None and debug.get("groq_http") == 429:
+        return result
+    # Retry any index the model dropped (partial arrays happen).
+    missing = [t for t in todo if t[0] not in result]
+    for start in range(0, len(missing), 3):
+        result.update(_translate_chunk(missing[start:start + 3], key, debug))
+    # Retry any title the model echoed back in Latin script.
+    echoed = [
+        (i, items[i]["title"])
+        for i in result
+        if not is_urdu(result[i][0])
+    ]
+    if echoed:
+        fixed = _translate_titles_only(echoed, key, debug)
+        for i, t in fixed.items():
+            if is_urdu(t):
+                result[i] = (t, result[i][1])
+    return result
+
+
+def _translate_titles_only(pairs, key, debug=None):
+    """Translate bare headlines to Urdu script, one per line, no JSON.
+
+    Used when the batch translator echoes an English title. Returns
+    {index: urdu_title}. Empty dict on any failure.
+    """
+    lines = "\n".join(t for _, t in pairs)
+    prompt = (
+        "Translate each headline below to natural Pakistani Urdu. "
+        "Keep people's names, place names, organisation names and numbers "
+        "exactly as they are. Reply with ONLY the Urdu headlines, one per "
+        "line, in the same order, no numbering, no English, no extra text.\n"
+        + lines
+    )
+    body = json.dumps(
+        {
+            "model": os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b"),
+            "messages": [
+                {"role": "system", "content": "You translate news headlines into Pakistani Urdu. Reply with Urdu lines only."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.2,
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        GROQ_URL,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + key,
+            "User-Agent": USER_AGENT,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            out = json.loads(resp.read())
+        text = out["choices"][0]["message"].get("content") or ""
+    except Exception as e:
+        if debug is not None:
+            debug["titles_retry_error"] = type(e).__name__ + ": " + str(e)[:150]
+        return {}
+    got = [ln.strip().strip("\"'").strip() for ln in text.strip().splitlines() if ln.strip()]
+    result = {}
+    for (i, _), t in zip(pairs, got):
+        if t:
+            result[i] = t
+    return result
+
+
+def _translate_chunk(chunk, key, debug=None):
     payload_items = [
-        {"i": i, "title": it["title"], "desc": it["desc"]} for i, it in todo
+        {"i": i, "title": it["title"], "desc": it["desc"]} for i, it in chunk
     ]
     prompt = (
         "Translate each news headline and short description to natural "
-        "Pakistani Urdu. Keep people's names, place names, organisation "
-        "names and numbers exactly as they are. Reply with ONLY a JSON "
-        "array like [{\"i\": 0, \"title\": \"...\", \"summary\": \"...\"}] - "
-        "one line per item, summary in Urdu, max 20 words. No other text.\n"
+        "Pakistani Urdu. The title field MUST be written in Urdu script, "
+        "never in English - for example 'Gold price rises in Pakistan' "
+        "becomes 'پاکستان میں سونے کی قیمت بڑھ گئی'. Keep people's names, "
+        "place names, organisation names and numbers exactly as they are. "
+        "Reply with ONLY a JSON array like "
+        "[{\"i\": 0, \"title\": \"...\", \"summary\": \"...\"}] - one line per "
+        "item, summary in Urdu, max 20 words. No other text.\n"
         + json.dumps(payload_items, ensure_ascii=False)
     )
     body = json.dumps(
@@ -186,7 +272,10 @@ def translate_batch(items, debug=None):
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             out = json.loads(resp.read())
-        text = out["choices"][0]["message"]["content"]
+        msg = out["choices"][0]["message"]
+        text = msg.get("content") or ""
+        if not text and msg.get("reasoning_content"):
+            text = msg.get("reasoning_content") or ""
     except urllib.error.HTTPError as e:
         if debug is not None:
             try:
@@ -194,29 +283,28 @@ def translate_batch(items, debug=None):
                 debug["groq_body"] = e.read()[:300].decode("utf-8", "replace")
             except Exception:
                 debug["groq_http"] = e.code
-        return {}
+        text = ""
     except Exception as e:
         if debug is not None:
             debug["error"] = type(e).__name__ + ": " + str(e)[:200]
-        return {}
-    if debug is not None:
+        text = ""
+    if debug is not None and text:
         debug["resp_len"] = len(text)
-    m = re.search(r"\[.*\]", text, re.S)
-    if not m:
-        if debug is not None:
-            debug["error"] = "no json array in reply"
-            debug["reply_head"] = text[:200]
-        return {}
-    try:
-        arr = json.loads(m.group(0))
-    except json.JSONDecodeError as e:
-        if debug is not None:
-            debug["error"] = "json parse: " + str(e)
-            debug["match_head"] = m.group(0)[:200]
-            debug["match_tail"] = m.group(0)[-200:]
-        return {}
+    arr = []
+    if text:
+        try:
+            parsed = json.loads(text)
+            arr = parsed.get("items") if isinstance(parsed, dict) else parsed
+        except json.JSONDecodeError:
+            m = re.search(r"\[.*\]", text, re.S)
+            if m:
+                try:
+                    arr = json.loads(m.group(0))
+                except json.JSONDecodeError as e:
+                    if debug is not None:
+                        debug["error"] = "json parse: " + str(e)
     result = {}
-    for entry in arr:
+    for entry in arr or []:
         try:
             i = int(entry["i"])
             t = (entry.get("title") or "").strip()
@@ -225,7 +313,18 @@ def translate_batch(items, debug=None):
                 result[i] = (t, s)
         except (KeyError, TypeError, ValueError):
             continue
-    return result
+    if result:
+        return result
+    # Fallback: split the chunk in half and retry each half (not on 429).
+    if debug is not None and debug.get("groq_http") == 429:
+        return {}
+    if len(chunk) > 3:
+        half = len(chunk) // 2
+        out = {}
+        out.update(_translate_chunk(chunk[:half], key, debug))
+        out.update(_translate_chunk(chunk[half:], key, debug))
+        return out
+    return {}
 
 
 def fetch_trends(geo):
