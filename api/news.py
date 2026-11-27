@@ -401,6 +401,15 @@ class handler(BaseHTTPRequestHandler):
                     payload["cached"] = True
                     return self._send(200, payload)
                 available, trends, note = fetch_trends(geo)
+                if available and trends:
+                    tkey = os.environ.get("GROQ_API_KEY", "").strip()
+                    if tkey:
+                        pairs = [(i, t["title"]) for i, t in enumerate(trends)]
+                        fixed = _translate_titles_only(pairs, tkey, debug)
+                        for i, t in fixed.items():
+                            if is_urdu(t):
+                                trends[i]["title_en"] = trends[i]["title"]
+                                trends[i]["title"] = t
                 payload = {
                     "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "trends_available": available,
