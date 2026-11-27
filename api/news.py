@@ -22,6 +22,7 @@ Cache-Control s-maxage=600 so Vercel caches them for 10 minutes, and a
 stale in-memory copy is served when Google rate-limits (HTTP 429).
 """
 
+import gzip
 import html
 import json
 import os
@@ -48,9 +49,16 @@ _cache = {}  # key -> (expires_at, payload)
 
 
 def fetch_text(url, timeout=20):
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    # Accept-Encoding: gzip shrinks large JSON feeds (Apna City News
+    # /api/public-news: 56 KB -> 14 KB) and avoids truncated reads.
+    req = urllib.request.Request(
+        url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"}
+    )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", "replace")
+        raw = resp.read()
+        if resp.headers.get("Content-Encoding") == "gzip":
+            raw = gzip.decompress(raw)
+        return raw.decode("utf-8", "replace")
 
 
 def clean_text(s):
@@ -97,6 +105,57 @@ def parse_rss(xml_text):
             }
         )
     return items
+
+
+ACN_API = "https://apna-city-news.pages.dev/api/public-news"
+ACN_SITE = "https://apna-city-news.pages.dev"
+ACN_CATS = {
+    "pakistan": {"local", "civic"},
+    "local": {"local", "civic"},
+    "world": {"world"},
+    "sports": {"sports_life"},
+}
+
+
+def fetch_apna_city_news(cat):
+    """Latest stories from Ahmed's own Apna City News site (public JSON API).
+
+    Already in Urdu, so no translation is needed. Returns up to 4 items
+    whose site category matches the requested feed, newest first. Any
+    failure returns [] so the Google News feed still works on its own.
+    """
+    raw = []
+    for _ in range(2):
+        try:
+            data = json.loads(fetch_text(ACN_API, timeout=20))
+            raw = data.get("news") or []
+            break
+        except Exception:
+            raw = []
+            continue
+    if not raw:
+        return []
+    want = ACN_CATS.get(cat, set())
+    out = []
+    for it in raw:
+        if (it.get("status") or "published") != "published":
+            continue
+        if (it.get("category") or "") not in want:
+            continue
+        title = (it.get("title") or "").strip()
+        if not title:
+            continue
+        out.append(
+            {
+                "title": title,
+                "link": ACN_SITE + "/news/" + str(it.get("id") or ""),
+                "time": it.get("createdAt") or "",
+                "desc": clean_text(it.get("summary") or "")[:220],
+                "source": "Apna City News",
+            }
+        )
+    out.sort(key=lambda x: x["time"], reverse=True)
+    return out[:4]
 
 
 def google_news_url(query=None, hl="en", gl="US"):
@@ -442,6 +501,8 @@ class handler(BaseHTTPRequestHandler):
                     continue
                 seen.add(k)
                 items.append(it)
+            # Ahmed's own Apna City News stories first, then Google News.
+            items = fetch_apna_city_news(cat) + items
             items = items[:12]
             if not items:
                 if key in _cache and _cache[key][0] > now - 3600:
