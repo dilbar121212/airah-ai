@@ -132,13 +132,18 @@ def feed_urls(cat, city):
     return [google_news_url(None, "en", "US")], "world"
 
 
-def translate_batch(items):
+def translate_batch(items, debug=None):
     """Translate Latin-script titles+descs to Pakistani Urdu in one Groq call.
 
     Returns {index: (title_ur, summary_ur)}. Empty dict on any failure.
+    When debug is a dict, failure details are recorded in it (no secrets).
     """
     key = os.environ.get("GROQ_API_KEY", "").strip()
+    if debug is not None:
+        debug["groq_key_present"] = bool(key)
     if not key:
+        if debug is not None:
+            debug["error"] = "no key"
         return {}
     todo = [
         (i, it)
@@ -182,14 +187,33 @@ def translate_batch(items):
         with urllib.request.urlopen(req, timeout=60) as resp:
             out = json.loads(resp.read())
         text = out["choices"][0]["message"]["content"]
-    except Exception:
+    except urllib.error.HTTPError as e:
+        if debug is not None:
+            try:
+                debug["groq_http"] = e.code
+                debug["groq_body"] = e.read()[:300].decode("utf-8", "replace")
+            except Exception:
+                debug["groq_http"] = e.code
         return {}
+    except Exception as e:
+        if debug is not None:
+            debug["error"] = type(e).__name__ + ": " + str(e)[:200]
+        return {}
+    if debug is not None:
+        debug["resp_len"] = len(text)
     m = re.search(r"\[.*\]", text, re.S)
     if not m:
+        if debug is not None:
+            debug["error"] = "no json array in reply"
+            debug["reply_head"] = text[:200]
         return {}
     try:
         arr = json.loads(m.group(0))
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        if debug is not None:
+            debug["error"] = "json parse: " + str(e)
+            debug["match_head"] = m.group(0)[:200]
+            debug["match_tail"] = m.group(0)[-200:]
         return {}
     result = {}
     for entry in arr:
@@ -268,6 +292,7 @@ class handler(BaseHTTPRequestHandler):
             cat = (qs.get("cat", ["pakistan"])[0] or "pakistan").strip().lower()
             city = (qs.get("city", [""])[0] or "").strip()
             geo = (qs.get("geo", ["PK"])[0] or "PK").strip().upper()
+            debug = {} if qs.get("debug") else None
 
             if cat == "trends":
                 key = "trends:" + geo
@@ -324,7 +349,7 @@ class handler(BaseHTTPRequestHandler):
                         + " - thodi der baad dobara try karo.",
                     },
                 )
-            translated = translate_batch(items)
+            translated = translate_batch(items, debug)
             out_items = []
             for i, it in enumerate(items):
                 title_ur, summary_ur = translated.get(i, (None, None))
@@ -359,6 +384,8 @@ class handler(BaseHTTPRequestHandler):
                 "cached": False,
                 "items": out_items,
             }
+            if debug is not None:
+                payload["debug"] = debug
             _cache[key] = (now + CACHE_TTL, payload)
             return self._send(200, payload)
         except Exception as e:  # noqa: BLE001 - surface as JSON, never crash
