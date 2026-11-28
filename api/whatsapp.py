@@ -16,6 +16,9 @@ Env vars needed in Vercel (Settings -> Environment Variables), then redeploy:
   WHATSAPP_PHONE_NUMBER_ID (the sending number's ID, same dashboard page)
   WHATSAPP_VERIFY_TOKEN (any random string you choose; the same value goes
     in the Meta webhook "Verify Token" field)
+  WHATSAPP_APP_SECRET (the App Secret from Meta developer dashboard >
+    App settings > Basic; used to verify X-Hub-Signature-256 on POST.
+    Until it is set, the signature check is skipped with a warning.)
 
 Meta webhook setup (Meta App Dashboard -> WhatsApp -> Configuration):
   Callback URL: https://airah-ai.vercel.app/api/whatsapp
@@ -30,6 +33,8 @@ messages are not used.
 Only the Python standard library is used (no requirements.txt needed).
 """
 
+import hashlib
+import hmac
 import json
 import os
 import urllib.error
@@ -55,6 +60,22 @@ DEFAULT_SYSTEM = (
     "not long essays."
 )
 MAX_REPLY_CHARS = 4000
+
+
+def valid_signature(raw: bytes, header: str) -> bool:
+    """Verify Meta's X-Hub-Signature-256 header against the raw POST body.
+
+    The App Secret (WHATSAPP_APP_SECRET) is the HMAC key. If it is not
+    configured yet, do not block — return True but log a warning.
+    """
+    secret = os.getenv("WHATSAPP_APP_SECRET")
+    if not secret:
+        print("whatsapp webhook: WHATSAPP_APP_SECRET not set — signature check disabled", flush=True)
+        return True
+    if not header or not header.startswith("sha256="):
+        return False
+    expected = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, header.split("=", 1)[1])
 
 
 def ask_groq(message, key):
@@ -136,10 +157,14 @@ class handler(BaseHTTPRequestHandler):
         return self._send_text(403, "Verification failed")
 
     def do_POST(self):
-        # Always answer Meta with 200 so it does not retry the webhook.
+        # Always answer Meta with 200 so it does not retry the webhook —
+        # except a forged request (bad signature), which gets a 403.
         try:
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length > 0 else b"{}"
+            # Verify Meta's signature on the RAW body first, before parsing.
+            if not valid_signature(raw, self.headers.get("X-Hub-Signature-256") or ""):
+                return self._send_json(403, {"detail": "Invalid signature"})
             try:
                 data = json.loads(raw or b"{}")
             except json.JSONDecodeError:
