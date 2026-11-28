@@ -16,12 +16,20 @@ Rules this endpoint enforces (Urdu voice fix, Nov 2026):
   script directly produces the garbled "Hindi/Bengali-like" sound.
 - Long replies are split into sentences and synthesised concurrently,
   then joined — so the voice no longer cuts off mid-sentence at 600 chars.
-  Total text is capped at 2000 chars (serverless time limit).
+  Total text is capped at 1500 chars (Nov 2026 upgrade; was 2000).
+- Rate limit (Nov 2026 upgrade): when UPSTASH_REDIS_REST_URL and
+  UPSTASH_REDIS_REST_TOKEN are set, each IP is limited to 20 requests
+  per 60 seconds; over the limit the endpoint answers 429 with
+  {"detail": "rate_limited"}. Without those vars (or on any Upstash
+  error) the check is skipped — fail-open.
 """
 
 import asyncio
 import json
 import re
+import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler
 
 import edge_tts
@@ -45,8 +53,49 @@ for _lang, _voices in VOICE_BY_LANG.items():
     for _v in _voices:
         VOICE_TO_LANG.setdefault(_v, _lang)  # first mapping wins: Uzma -> 'ur'
 
-MAX_TOTAL_CHARS = 2000
+MAX_TOTAL_CHARS = 1500
 MAX_CHUNK_CHARS = 250
+RATE_LIMIT = 20  # requests per window, per IP
+RATE_WINDOW = 60  # seconds
+
+
+def _client_ip(handler):
+    return (
+        (handler.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+        or "unknown"
+    )
+
+
+def is_limited(ip):
+    """True when this IP passed RATE_LIMIT requests in the current window.
+
+    Upstash Redis REST (free tier). Fail-open: without env vars, or on any
+    error, returns False. Upstash returns INCR results as strings, so the
+    count is cast to int before comparing.
+    """
+    url = os.environ.get("UPSTASH_REDIS_REST_URL", "").strip()
+    tok = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "").strip()
+    if not url or not tok:
+        return False
+    key = "rl:%s:%d" % (ip, int(time.time() // RATE_WINDOW))
+    try:
+        payload = json.dumps([["INCR", key], ["EXPIRE", key, RATE_WINDOW]]).encode(
+            "utf-8"
+        )
+        req = urllib.request.Request(
+            url.rstrip("/") + "/pipeline",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + tok,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            out = json.loads(resp.read())
+        return int(out[0].get("result", 0)) > RATE_LIMIT
+    except Exception:
+        return False
 
 # --- Roman Urdu -> Urdu script (common words; unknown words pass through) ---
 PHRASES = {
@@ -255,6 +304,8 @@ class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            if is_limited(_client_ip(self)):
+                return self._send_json(429, {"detail": "rate_limited"})
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length > 0 else b"{}"
             try:
